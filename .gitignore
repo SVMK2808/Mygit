@@ -1,0 +1,46 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+#IDE
+.vscode/
+.idea/
+*.swp/
+*.swo
+*~
+
+#Compiled files
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+
+#CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+
+#Test outputs
+Testing/
+*.gcov
+*.gcda
+*.gcno
+coverage/
+
+#OS
+.DS_Store
+Thumbs.db
+
+#Project specific
+.mygit/
+*.log
+
+
+#Keep assignment PDF
+!AOS_Assignment_*.pdf
