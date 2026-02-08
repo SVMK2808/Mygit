@@ -8,7 +8,7 @@
 namespace mygit {
 
     //Object types
-    enum class Objectype : uint8_t {
+    enum class ObjectType : uint8_t {
         Blob,
         Tree, 
         Commit
@@ -27,7 +27,7 @@ namespace mygit {
         FileMode mode; 
         std::string name; 
         std::string hash; // SHA-1 hash of the object
-        Objectype type;
+        ObjectType type;
     };
 
     //Commit metadata

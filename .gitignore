@@ -44,3 +44,8 @@ Thumbs.db
 
 #Keep assignment PDF
 !AOS_Assignment_*.pdf
+
+#Ignore test repositories
+test-repos/
+temp-test/
+*.test/
