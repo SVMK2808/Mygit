@@ -43,6 +43,9 @@ set(CORE_SOURCES
     src/cli/log_command.cpp
     src/cli/branch_command.cpp
     src/cli/checkout_command.cpp
+    src/diff/diff.cpp
+    src/utils/gitignore.cpp
+    src/cli/diff_command.cpp
 )
 
 #Core Library
@@ -61,6 +64,7 @@ target_link_libraries(mygit_core
 
 #Main executable
 add_executable(mygit src/cli/main.cpp)
+target_include_directories(mygit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(mygit PRIVATE mygit_core)
 
 #install
