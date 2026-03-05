@@ -82,11 +82,16 @@ namespace mygit {
         const fs::path heads_dir = git_dir_ / "refs" / "heads";
         std::vector<std::string> branches;
 
-        // Loose refs
+        // Loose refs — use recursive iterator to find names like feature/login
         if (fs::exists(heads_dir)) {
-            for (const auto& entry : fs::directory_iterator(heads_dir)) {
+            for (const auto& entry : fs::recursive_directory_iterator(heads_dir)) {
                 if (entry.is_regular_file()) {
-                    branches.push_back(entry.path().filename().string());
+                    // branch name is the path relative to heads_dir, using '/' separators
+                    std::error_code ec;
+                    const auto rel = fs::relative(entry.path(), heads_dir, ec);
+                    if (!ec) {
+                        branches.push_back(rel.generic_string()); // always '/' separators
+                    }
                 }
             }
         }
@@ -134,7 +139,14 @@ namespace mygit {
         return git_dir_ / "refs" / "heads" / name;
     }
 
-    std::optional<std::string> RefManager::readRef(const fs::path& ref_path) const {
+    std::optional<std::string> RefManager::readRef(const fs::path& ref_path, int depth) const {
+        constexpr int kMaxRefDepth = 10;
+        if (depth > kMaxRefDepth) {
+            throw std::runtime_error(
+                "ref resolution exceeded maximum depth — possible circular symbolic ref: "
+                + ref_path.string());
+        }
+
         if (!fs::exists(ref_path)) {
             // Fall back to packed-refs before giving up
             // Reconstruct the ref name relative to git_dir_
@@ -156,7 +168,7 @@ namespace mygit {
         // Symbolic ref: "ref: refs/heads/main"
         if (content.rfind("ref: ", 0) == 0) {
             const std::string target = content.substr(5);
-            return readRef(git_dir_ / target);
+            return readRef(git_dir_ / target, depth + 1);
         }
 
         // Raw hash (40 hex chars): unborn if empty

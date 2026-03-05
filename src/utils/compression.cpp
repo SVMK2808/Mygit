@@ -27,10 +27,14 @@ namespace mygit {
         }
 
         std::vector<std::byte> Compression::decompress(const std::vector<std::byte>& data) {
-            // Start with 4× the compressed size; grow if needed
-            std::vector<std::byte> out(data.size() * 4);
+            if (data.empty()) return {};
 
-            while (true) {
+            // Start with 4× the compressed size; grow if needed.
+            // Cap at 30 doublings (~4 GB) to prevent OOM on corrupt/bomb data.
+            constexpr int kMaxDoublings = 30;
+            std::vector<std::byte> out(std::max(data.size() * 4, static_cast<size_t>(256)));
+
+            for (int attempt = 0; attempt <= kMaxDoublings; ++attempt) {
                 uLongf out_size = static_cast<uLongf>(out.size());
                 int rc = uncompress(
                     reinterpret_cast<Bytef*>(out.data()),
@@ -43,12 +47,18 @@ namespace mygit {
                     out.resize(out_size);
                     return out;
                 } else if (rc == Z_BUF_ERROR) {
-                    // Output buffer too small, double and retry
+                    // Output buffer too small — double and retry
+                    if (attempt == kMaxDoublings) {
+                        throw std::runtime_error(
+                            "zlib decompress: output exceeded maximum buffer size (corrupt object?)");
+                    }
                     out.resize(out.size() * 2);
                 } else {
                     throw std::runtime_error("zlib decompress failed: " + std::to_string(rc));
                 }
             }
+            // Should never reach here, but satisfy the compiler
+            throw std::runtime_error("zlib decompress: unexpected failure");
         }
 
     } // namespace utils

@@ -1,48 +1,143 @@
 #include "mygit/diff/diff.h"
 
 #include <algorithm>
+#include <climits>
 #include <iostream>
 #include <sstream>
 
 namespace mygit {
     namespace diff {
 
-        // ── Myers / LCS-based differ ─────────────────────────────────────
-        // Returns an edit script as a vector of pairs: (op, line)
-        //   op: ' ' = keep, '-' = delete, '+' = insert
-        static std::vector<std::pair<char, std::string>>
+        // ── Myers O(N+D) shortest-edit-script algorithm ──────────────────
+        //
+        // Implements the linear-time shortest-edit-script algorithm described
+        // by Eugene W. Myers (1986).  Time O((M+N)*D), where D is the edit
+        // distance.  Memory O(D²) for the backtrace snapshots.
+        //
+        // Returns a vector of (op, line) pairs:
+        //   op == ' '  → keep (context)
+        //   op == '-'  → delete from `a`
+        //   op == '+'  → insert from `b`
+        //
+        // Compact snapshot approach
+        // ─────────────────────────
+        // During the forward pass we maintain a single working array V:
+        //   V[k + OFFSET]  =  furthest x reached on diagonal k
+        //                     (where k = x − y).
+        // After each round d we save a compact snapshot vs[d] covering
+        // only k ∈ [−d, d] (size 2d+1).  These snapshots are used during
+        // backtracing; the working V is used only for the forward pass.
+        //
+        // Memory proof: during backtracing at round d we only access
+        // vs[d−1][prev_k + (d−1)] where prev_k = k ± 1 and |k| ≤ d.
+        // Interior cases (|k| < d) give |prev_k| ≤ d−1 so the access is
+        // always within bounds.
+
+        std::vector<std::pair<char, std::string>>
         computeEditScript(const std::vector<std::string>& a,
                           const std::vector<std::string>& b) {
             const int M = static_cast<int>(a.size());
             const int N = static_cast<int>(b.size());
 
-            // DP table: lcs[i][j] = LCS length of a[0..i) and b[0..j)
-            std::vector<std::vector<int>> dp(M + 1, std::vector<int>(N + 1, 0));
-            for (int i = 1; i <= M; ++i) {
-                for (int j = 1; j <= N; ++j) {
-                    if (a[i-1] == b[j-1]) {
-                        dp[i][j] = dp[i-1][j-1] + 1;
-                    } else {
-                        dp[i][j] = std::max(dp[i-1][j], dp[i][j-1]);
-                    }
-                }
+            // ── trivial cases ─────────────────────────────────────────────
+            if (M == 0 && N == 0) return {};
+            if (M == 0) {
+                std::vector<std::pair<char, std::string>> res;
+                res.reserve(N);
+                for (const auto& l : b) res.push_back({'+', l});
+                return res;
+            }
+            if (N == 0) {
+                std::vector<std::pair<char, std::string>> res;
+                res.reserve(M);
+                for (const auto& l : a) res.push_back({'-', l});
+                return res;
             }
 
-            // Back-trace to build edit script
-            std::vector<std::pair<char, std::string>> script;
-            int i = M, j = N;
-            while (i > 0 || j > 0) {
-                if (i > 0 && j > 0 && a[i-1] == b[j-1]) {
-                    script.push_back({' ', a[i-1]});
-                    --i; --j;
-                } else if (j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j])) {
-                    script.push_back({'+', b[j-1]});
-                    --j;
-                } else {
-                    script.push_back({'-', a[i-1]});
-                    --i;
+            const int MAX    = M + N;
+            const int OFFSET = MAX; // index k+OFFSET maps diagonal k → V array slot
+
+            // Working V array for the forward pass
+            std::vector<int> V(2 * MAX + 2, 0);
+            V[1 + OFFSET] = 0; // sentinel: on diagonal k=1, furthest x = 0
+
+            // Compact snapshots; vs[d] has 2*d+1 elements, indexed by k+d
+            std::vector<std::vector<int>> vs;
+            vs.reserve(64);
+
+            int found_d = -1;
+            for (int d = 0; d <= MAX; ++d) {
+                for (int k = -d; k <= d; k += 2) {
+                    int x;
+                    if (k == -d ||
+                       (k != d && V[k - 1 + OFFSET] < V[k + 1 + OFFSET])) {
+                        x = V[k + 1 + OFFSET];      // insert: move from diagonal k+1
+                    } else {
+                        x = V[k - 1 + OFFSET] + 1;  // delete: move from diagonal k−1
+                    }
+                    int y = x - k;
+                    while (x < M && y < N && a[x] == b[y]) { ++x; ++y; }
+                    V[k + OFFSET] = x;
+                    if (x == M && y == N) { found_d = d; break; }
                 }
+
+                // Save compact snapshot: k ∈ [−d, d]
+                std::vector<int> snap(2 * d + 1);
+                for (int k = -d; k <= d; ++k) snap[k + d] = V[k + OFFSET];
+                vs.push_back(std::move(snap));
+
+                if (found_d >= 0) break;
             }
+
+            if (found_d < 0) {
+                // Should never happen (MAX = M+N guarantees a path exists),
+                // but defend against it by emitting a trivial edit script.
+                std::vector<std::pair<char, std::string>> res;
+                for (const auto& l : a) res.push_back({'-', l});
+                for (const auto& l : b) res.push_back({'+', l});
+                return res;
+            }
+
+            // ── backtrace from (M, N) to (0, 0) ──────────────────────────
+            std::vector<std::pair<char, std::string>> script;
+            script.reserve(M + N);
+
+            int x = M, y = N;
+            for (int d = found_d; d > 0; --d) {
+                // vs[d−1] covers k ∈ [−(d−1), d−1] with offset pOFF = d−1
+                const auto& Vp = vs[d - 1];
+                const int pOFF = d - 1;
+
+                const int k = x - y;
+
+                // Determine which move was taken: insert (from k+1) or delete (from k−1)
+                bool ins;
+                if      (k == -d) ins = true;  // must have come via insert
+                else if (k ==  d) ins = false; // must have come via delete
+                else ins = (Vp[k - 1 + pOFF] < Vp[k + 1 + pOFF]);
+
+                const int prev_k = ins ? k + 1 : k - 1;
+                const int prev_x = Vp[prev_k + pOFF];
+                const int prev_y = prev_x - prev_k;
+
+                // Landing position after the single edit
+                const int post_x = ins ? prev_x     : prev_x + 1;
+                const int post_y = ins ? prev_y + 1 : prev_y;
+
+                // Unwind the snake (matching lines)
+                while (x > post_x && y > post_y) {
+                    --x; --y;
+                    script.push_back({' ', a[x]});
+                }
+
+                // Record the edit
+                if (ins) { script.push_back({'+', b[--y]}); }
+                else      { script.push_back({'-', a[--x]}); }
+            }
+
+            // Unwind the initial snake before the first edit
+            while (x > 0 && y > 0) { --x; --y; script.push_back({' ', a[x]}); }
+
             std::reverse(script.begin(), script.end());
             return script;
         }
@@ -63,53 +158,50 @@ namespace mygit {
             const auto script = computeEditScript(old_lines, new_lines);
             if (script.empty()) return fd;
 
-            // Identify changed positions to decide which context to include
-            // Then group into hunks with CONTEXT lines on each side
             const int S = static_cast<int>(script.size());
             std::vector<bool> changed(S, false);
-            for (int k = 0; k < S; ++k) {
+            for (int k = 0; k < S; ++k)
                 if (script[k].first != ' ') changed[k] = true;
+
+            // Mark every script line that should appear in any hunk:
+            // each changed line pulls in CONTEXT context lines on both sides.
+            // Contiguous marked runs become individual hunks — this correctly
+            // creates separate hunks for disjoint change groups.
+            std::vector<bool> in_hunk(S, false);
+            for (int i = 0; i < S; ++i) {
+                if (changed[i]) {
+                    const int lo = std::max(0, i - CONTEXT);
+                    const int hi = std::min(S, i + CONTEXT + 1);
+                    for (int j = lo; j < hi; ++j) in_hunk[j] = true;
+                }
+            }
+
+            // Pre-compute old/new line numbers for every script position
+            // so we can quickly look them up when starting a hunk.
+            std::vector<int> old_lineno(S + 1, 1), new_lineno(S + 1, 1);
+            for (int k = 0; k < S; ++k) {
+                old_lineno[k + 1] = old_lineno[k] + (script[k].first != '+' ? 1 : 0);
+                new_lineno[k + 1] = new_lineno[k] + (script[k].first != '-' ? 1 : 0);
             }
 
             int k = 0;
             while (k < S) {
-                // Skip unchanged lines that are far from any change
-                if (!changed[k]) {
-                    // Check if any change is within CONTEXT lines ahead
-                    bool near = false;
-                    for (int c = k; c < std::min(S, k + CONTEXT + 1); ++c) {
-                        if (changed[c]) { near = true; break; }
-                    }
-                    if (!near) { ++k; continue; }
-                }
+                if (!in_hunk[k]) { ++k; continue; }
 
-                // Start of a new hunk — go back CONTEXT lines if possible
-                int hunk_start = std::max(0, k - CONTEXT);
-                // Rewind k to hunk_start
-                k = hunk_start;
+                // Start of a contiguous in_hunk run
+                const int hunk_start = k;
+                while (k < S && in_hunk[k]) ++k;
+                const int hunk_end = k;
 
                 Hunk hunk;
-                // Determine old/new start lines by counting ops before hunk_start
-                int old_line = 1, new_line = 1;
-                for (int m = 0; m < hunk_start; ++m) {
-                    if (script[m].first != '+') ++old_line;
-                    if (script[m].first != '-') ++new_line;
-                }
-                hunk.old_start = old_line;
-                hunk.new_start = new_line;
+                hunk.old_start = old_lineno[hunk_start];
+                hunk.new_start = new_lineno[hunk_start];
 
-                int last_change = k;
-                for (int m = k; m < S; ++m) {
-                    if (changed[m]) last_change = m;
-                }
-                const int hunk_end = std::min(S, last_change + CONTEXT + 1);
-
-                while (k < hunk_end) {
-                    const auto [op, line] = script[k];
+                for (int m = hunk_start; m < hunk_end; ++m) {
+                    const auto [op, line] = script[m];
                     hunk.lines.push_back(std::string(1, op) + line);
                     if (op != '+') ++hunk.old_count;
                     if (op != '-') ++hunk.new_count;
-                    ++k;
                 }
 
                 fd.hunks.push_back(std::move(hunk));

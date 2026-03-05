@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mygit/core/types.h"
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -47,6 +48,12 @@ namespace mygit {
         std::unordered_map<std::string, std::size_t> path_map_;
 
         void rebuildMap();
+
+        // Parse binary index (version 1).  Throws on error.
+        void readBinary(const std::vector<std::byte>& data);
+
+        // Parse legacy plain-text index (backward compat).
+        void readLegacyText(const std::string& text);
     };
 
 } // namespace mygit

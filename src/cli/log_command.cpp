@@ -29,7 +29,7 @@ namespace mygit {
             }
 
             std::string current_hash = *current_hash_opt;
-            constexpr int max_commits = 50; // guard against very long histories
+            constexpr int max_commits = 1000; // practical upper bound
             int count = 0;
 
             while (!current_hash.empty() && count < max_commits) {
@@ -39,13 +39,28 @@ namespace mygit {
                     return {1};
                 }
 
-                const Commit commit = Commit::deserialize(*raw);
+                Commit commit("", {}, CommitMetadata{});
+                try {
+                    commit = Commit::deserialize(*raw);
+                } catch (const std::exception& e) {
+                    std::cerr << "warning: corrupt commit object " << current_hash
+                              << ": " << e.what() << " — stopping here\n";
+                    break;
+                }
+
                 const auto& meta = commit.metadata();
 
-                // Format timestamp
-                char time_buf[32];
+                // Format timestamp with thread-safe localtime
+                char time_buf[32] = {};
+                std::time_t ts = meta.timestamp;
+#if defined(_POSIX_VERSION)
+                struct tm tm_info{};
+                localtime_r(&ts, &tm_info);
+                std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_info);
+#else
                 std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S",
-                              std::localtime(&meta.timestamp));
+                              std::localtime(&ts));
+#endif
 
                 std::cout << "commit " << current_hash << "\n"
                           << "Author: " << meta.author_name
@@ -57,6 +72,10 @@ namespace mygit {
                 if (commit.parentHashes().empty()) break;
                 current_hash = commit.parentHashes()[0]; // follow first parent
                 ++count;
+            }
+
+            if (count == max_commits) {
+                std::cerr << "(history truncated at " << max_commits << " commits)\n";
             }
 
             return {0};

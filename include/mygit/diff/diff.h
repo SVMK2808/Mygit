@@ -31,5 +31,12 @@ namespace mygit {
         // Print a FileDiff in unified-diff format to stdout
         void printUnifiedDiff(const FileDiff& d);
 
+        // Low-level Myers O(N+D) edit script between two line sequences.
+        // op: ' '=keep, '-'=delete from `a`, '+'=insert from `b'.
+        // Used by the merge engine; also available to other callers.
+        std::vector<std::pair<char, std::string>>
+        computeEditScript(const std::vector<std::string>& a,
+                          const std::vector<std::string>& b);
+
     } // namespace diff
 } // namespace mygit

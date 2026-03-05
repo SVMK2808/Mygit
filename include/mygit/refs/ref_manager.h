@@ -56,8 +56,9 @@ namespace mygit {
         // Convert a short branch name to its full ref path on disk
         fs::path branchPath(const std::string& name) const;
 
-        // Read raw ref text from a file, following symbolic refs recursively
-        std::optional<std::string> readRef(const fs::path& ref_path) const;
+        // Read raw ref text from a file, following symbolic refs recursively.
+        // depth prevents infinite loops from circular symbolic refs.
+        std::optional<std::string> readRef(const fs::path& ref_path, int depth = 0) const;
 
         // Look up a fully-qualified refname in packed-refs
         std::optional<std::string> resolvePackedRef(const std::string& refname) const;

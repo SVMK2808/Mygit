@@ -19,12 +19,15 @@ namespace mygit {
         // Each command receives the remaining argv tokens after the command name
         CommandResult runInit(const Args& args);
         CommandResult runAdd(const Args& args);
+        CommandResult runRm(const Args& args);
         CommandResult runCommit(const Args& args);
         CommandResult runStatus(const Args& args);
         CommandResult runLog(const Args& args);
         CommandResult runBranch(const Args& args);
         CommandResult runCheckout(const Args& args);
         CommandResult runDiff(const Args& args);
+        CommandResult runMerge(const Args& args);
+        CommandResult runGc(const Args& args);
 
     } // namespace cli
 } // namespace mygit

@@ -43,10 +43,29 @@ namespace mygit {
 
             // Directory pattern: trailing '/' means "anything inside this directory"
             if (!pat.empty() && pat.back() == '/') {
-                const std::string dir_prefix = pat; // includes trailing '/'
-                if (rel_path.substr(0, dir_prefix.size()) == dir_prefix) return true;
-                // Also match the directory name itself (without trailing slash)
                 const std::string dir_name = pat.substr(0, pat.size() - 1);
+
+                // If the pattern has no '/', match the directory name against ANY path component.
+                // e.g. pattern "build/" matches "build/foo", "src/build/foo", "a/b/build/c"
+                if (dir_name.find('/') == std::string::npos) {
+                    // Check each path component
+                    // rel_path looks like "src/build/foo.cpp"
+                    std::string remaining = rel_path;
+                    while (!remaining.empty()) {
+                        const size_t slash = remaining.find('/');
+                        const std::string component = (slash == std::string::npos)
+                                                      ? remaining
+                                                      : remaining.substr(0, slash);
+                        if (component == dir_name) return true;
+                        if (slash == std::string::npos) break;
+                        remaining = remaining.substr(slash + 1);
+                    }
+                    return false;
+                }
+
+                // Anchored directory pattern: match from root
+                const std::string dir_prefix = dir_name + "/";
+                if (rel_path.substr(0, dir_prefix.size()) == dir_prefix) return true;
                 if (rel_path == dir_name) return true;
                 return false;
             }

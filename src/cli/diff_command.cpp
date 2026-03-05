@@ -17,11 +17,21 @@ namespace mygit {
             std::istringstream iss(text);
             std::string line;
             while (std::getline(iss, line)) {
-                // Strip trailing \r for cross-platform consistency
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 lines.push_back(line);
             }
             return lines;
+        }
+
+        // Returns true if the first `scan_bytes` bytes of `data` contain a null byte,
+        // which is a reliable signal that the content is binary.
+        static bool isBinary(const std::vector<std::byte>& data,
+                              size_t scan_bytes = 8192) {
+            const size_t limit = std::min(data.size(), scan_bytes);
+            for (size_t i = 0; i < limit; ++i) {
+                if (data[i] == static_cast<std::byte>('\0')) return true;
+            }
+            return false;
         }
 
         CommandResult runDiff(const Args& args) {
@@ -37,43 +47,34 @@ namespace mygit {
             }
             auto& repo = *repo_opt;
 
-            // Resolve the HEAD commit tree (may be absent on unborn repos)
-            std::optional<std::string> head_hash = repo.refs().resolveHead();
-
-            // Collect the (path -> blob_hash) mapping from the last commit's tree
-            std::unordered_map<std::string, std::string> committed_hashes;
-            if (head_hash) {
-                auto commit_raw = repo.objectStore().load(*head_hash);
-                if (commit_raw) {
-                    const auto commit = Commit::deserialize(*commit_raw);
-                    auto tree_raw = repo.objectStore().load(commit.treeHash());
-                    if (tree_raw) {
-                        // Flatten the tree (single level for now; recursive support
-                        // matches the current tree builder)
-                        const auto tree = Tree::deserialize(*tree_raw);
-                        for (const auto& [name, entry] : tree.entries()) {
-                            committed_hashes[name] = entry.hash;
-                        }
-                    }
-                }
-            }
+            // Collect the (path -> blob_hash) mapping from the last commit's tree.
+            // Uses getCommittedFiles() which recurses into subdirectories.
+            const auto committed_hashes = repo.getCommittedFiles();
 
             const auto& entries = repo.index().entries();
 
-            // Determine which files to diff
-            // If args are given, only diff those paths; otherwise diff all staged
+            // Determine which files to diff.
+            // If args are given, only diff those paths; otherwise diff all staged + committed.
             std::vector<std::string> targets;
             if (!args.empty()) {
                 for (const auto& a : args) {
-                    targets.push_back(fs::relative(fs::absolute(a), repo.workDir()).string());
+                    std::error_code ec;
+                    const auto rel = fs::relative(fs::absolute(a), repo.workDir(), ec);
+                    if (!ec) {
+                        targets.push_back(rel.generic_string());
+                    } else {
+                        targets.push_back(a);
+                    }
                 }
             } else {
                 for (const auto& e : entries) targets.push_back(e.path);
-                // Also include files deleted from working tree that were committed
-                for (const auto& [path, _] : committed_hashes) {
-                    if (std::find(targets.begin(), targets.end(), path) == targets.end()) {
-                        targets.push_back(path);
+                // Also include committed files that are no longer in the index (deletions)
+                for (const auto& [committed_path, _] : committed_hashes) {
+                    bool already = false;
+                    for (const auto& t : targets) {
+                        if (t == committed_path) { already = true; break; }
                     }
+                    if (!already) targets.push_back(committed_path);
                 }
             }
 
@@ -82,28 +83,42 @@ namespace mygit {
                 const fs::path abs_path = repo.workDir() / rel_path;
 
                 // Old content: from last commit
-                std::vector<std::string> old_lines;
+                std::vector<std::byte> old_bytes;
                 auto it = committed_hashes.find(rel_path);
                 if (it != committed_hashes.end()) {
                     auto blob_raw = repo.objectStore().load(it->second);
-                    if (blob_raw) {
-                        std::string content;
-                        for (std::byte b : *blob_raw) content += static_cast<char>(b);
-                        old_lines = toLines(content);
-                    }
+                    if (blob_raw) old_bytes = std::move(*blob_raw);
                 }
 
                 // New content: from working tree
-                std::vector<std::string> new_lines;
+                std::vector<std::byte> new_bytes;
                 if (fs::exists(abs_path)) {
                     try {
                         const Blob blob = Blob::fromFile(abs_path.string());
-                        new_lines = toLines(blob.contentAsString());
+                        new_bytes = blob.serialize();
                     } catch (...) {}
                 }
 
-                if (old_lines == new_lines) continue;
+                if (old_bytes == new_bytes) continue;
                 any_diff = true;
+
+                // Binary file detection
+                if (isBinary(old_bytes) || isBinary(new_bytes)) {
+                    std::cout << "Binary files a/" << rel_path
+                              << " and b/" << rel_path << " differ\n";
+                    continue;
+                }
+
+                // Convert to string for line-based diff
+                auto bytesToStr = [](const std::vector<std::byte>& b) {
+                    std::string s;
+                    s.reserve(b.size());
+                    for (std::byte by : b) s.push_back(static_cast<char>(by));
+                    return s;
+                };
+
+                const auto old_lines = toLines(bytesToStr(old_bytes));
+                const auto new_lines = toLines(bytesToStr(new_bytes));
 
                 const auto fd = diff::computeDiff(rel_path, rel_path, old_lines, new_lines);
                 diff::printUnifiedDiff(fd);

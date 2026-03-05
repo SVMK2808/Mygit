@@ -46,6 +46,10 @@ set(CORE_SOURCES
     src/diff/diff.cpp
     src/utils/gitignore.cpp
     src/cli/diff_command.cpp
+    src/cli/rm_command.cpp
+    src/merge/merge.cpp
+    src/cli/merge_command.cpp
+    src/cli/gc_command.cpp
 )
 
 #Core Library
